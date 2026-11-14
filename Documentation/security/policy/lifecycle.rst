@@ -1,3 +1,5 @@
+.. This file was not reviewed by a human before submission
+
 .. only:: not (epub or latex or html)
 
     WARNING: You are looking at unreleased Cilium documentation.
@@ -44,6 +46,15 @@ a change in identity, policy, or configuration.
 
 An endpoint transitions into the ``disconnecting`` state when it is
 being deleted, regardless of its current state.
+
+While the Cilium agent is starting up, endpoint creation requests are
+blocked until the agent has synchronized the cluster's network policies
+from Kubernetes. This guarantees that the initial policy of a (re)created
+endpoint is always computed against the complete set of policies, instead
+of falling back to allowing all traffic until the first policy update is
+applied. As a consequence, pods that are (re)created while the agent is
+still synchronizing remain in the ``ContainerCreating`` state slightly
+longer instead of running without policy enforcement.
 
 .. _init_identity:
 

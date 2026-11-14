@@ -1,9 +1,11 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
 package api
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -18,9 +20,54 @@ import (
 	endpointmetadata "github.com/cilium/cilium/pkg/endpoint/metadata"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
+	k8sSynced "github.com/cilium/cilium/pkg/k8s/synced"
 	"github.com/cilium/cilium/pkg/labelsfilter"
 	"github.com/cilium/cilium/pkg/time"
 )
+
+func TestWaitForK8sCacheSync(t *testing.T) {
+	logger := hivetest.Logger(t)
+
+	t.Run("nil cache status is considered synchronized", func(t *testing.T) {
+		m := endpointAPIManager{logger: logger}
+		require.NoError(t, m.waitForK8sCacheSync(t.Context()))
+	})
+
+	t.Run("returns immediately once caches are synced", func(t *testing.T) {
+		cacheStatus := make(k8sSynced.CacheStatus)
+		close(cacheStatus)
+		m := endpointAPIManager{logger: logger, cacheStatus: cacheStatus}
+		require.NoError(t, m.waitForK8sCacheSync(t.Context()))
+	})
+
+	t.Run("blocks until caches are synced", func(t *testing.T) {
+		cacheStatus := make(k8sSynced.CacheStatus)
+		m := endpointAPIManager{logger: logger, cacheStatus: cacheStatus}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- m.waitForK8sCacheSync(t.Context())
+		}()
+
+		select {
+		case err := <-done:
+			t.Fatalf("waitForK8sCacheSync returned %v before caches synced", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(cacheStatus)
+		require.NoError(t, <-done)
+	})
+
+	t.Run("returns context error when canceled while waiting", func(t *testing.T) {
+		cacheStatus := make(k8sSynced.CacheStatus)
+		m := endpointAPIManager{logger: logger, cacheStatus: cacheStatus}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		require.ErrorIs(t, m.waitForK8sCacheSync(ctx), context.Canceled)
+	})
+}
 
 func TestHandleOutdatedPodInformer(t *testing.T) {
 	defer func(current time.Duration) { handleOutdatedPodInformerRetryPeriod = current }(handleOutdatedPodInformerRetryPeriod)

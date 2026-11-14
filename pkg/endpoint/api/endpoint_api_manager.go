@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -32,6 +33,7 @@ import (
 	"github.com/cilium/cilium/pkg/ipam"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	k8sSynced "github.com/cilium/cilium/pkg/k8s/synced"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/labelsfilter"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -62,6 +64,10 @@ type endpointAPIManager struct {
 	clientset        k8sClient.Clientset
 	cniConfigManager cni.CNIConfigManager
 	ipam             *ipam.IPAM
+
+	// cacheStatus is closed once the k8s caches have synchronized for the
+	// first time. Endpoint creation must wait for it, see waitForK8sCacheSync.
+	cacheStatus k8sSynced.CacheStatus
 }
 
 var _ EndpointAPIManager = &endpointAPIManager{}
@@ -84,9 +90,47 @@ func (m *endpointAPIManager) errorDuringCreation(ep *endpoint.Endpoint, err erro
 	return nil, PutEndpointIDFailedCode, err
 }
 
+// waitForK8sCacheSync blocks until the k8s caches have synchronized for the
+// first time, or until the context is canceled.
+//
+// The endpoint's initial policy is computed from the policy repository,
+// which is populated from k8s NetworkPolicy/CiliumNetworkPolicy resources
+// during the initial cache sync. If an endpoint is created before that sync
+// completes, its initial policy is computed against an incomplete
+// repository: no rules select the endpoint's identity yet, and in the
+// default policy enforcement mode that yields an allow-all policy until the
+// first policy update triggers a recomputation. That leaves (re)created
+// pods without policy enforcement for the duration of the sync. Waiting here
+// mirrors the guarantee the restore path gives restored endpoints (see
+// daemon/cmd/endpoint_restore.go) and closes that window.
+func (m *endpointAPIManager) waitForK8sCacheSync(ctx context.Context) error {
+	// A nil CacheStatus is considered synchronized, matching
+	// CacheStatus.Synchronized().
+	if m.cacheStatus == nil {
+		return nil
+	}
+	select {
+	case <-m.cacheStatus:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // createEndpoint attempts to create the endpoint corresponding to the change
 // request that was specified.
 func (m *endpointAPIManager) CreateEndpoint(ctx context.Context, epTemplate *models.EndpointChangeRequest) (*endpoint.Endpoint, int, error) {
+	// The endpoint's initial policy must not be computed before the policy
+	// repository has ingested the cluster's policies, so block creation
+	// until the k8s caches have synchronized.
+	if err := m.waitForK8sCacheSync(ctx); err != nil {
+		m.logger.Info("Endpoint creation canceled while waiting for k8s cache synchronization",
+			logfields.Error, err,
+			logfields.K8sPodName, epTemplate.K8sNamespace+"/"+epTemplate.K8sPodName,
+		)
+		return nil, PutEndpointIDFailedCode, err
+	}
+
 	if option.Config.EnableEndpointRoutes {
 		if epTemplate.DatapathConfiguration == nil {
 			epTemplate.DatapathConfiguration = &models.EndpointDatapathConfiguration{}

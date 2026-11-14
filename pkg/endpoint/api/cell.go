@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -20,6 +21,7 @@ import (
 	"github.com/cilium/cilium/pkg/endpointstate"
 	"github.com/cilium/cilium/pkg/ipam"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
+	k8sSynced "github.com/cilium/cilium/pkg/k8s/synced"
 	"github.com/cilium/cilium/pkg/promise"
 	"github.com/cilium/cilium/pkg/rate"
 )
@@ -69,6 +71,7 @@ type endpointAPIManagerParams struct {
 	Clientset        k8sClient.Clientset
 	CNIConfigManager cni.CNIConfigManager
 	IPAM             *ipam.IPAM
+	CacheStatus      k8sSynced.CacheStatus
 }
 
 func newEndpointAPIManager(params endpointAPIManagerParams) EndpointAPIManager {
@@ -83,6 +86,7 @@ func newEndpointAPIManager(params endpointAPIManagerParams) EndpointAPIManager {
 		clientset:             params.Clientset,
 		cniConfigManager:      params.CNIConfigManager,
 		ipam:                  params.IPAM,
+		cacheStatus:           params.CacheStatus,
 	}
 }
 
